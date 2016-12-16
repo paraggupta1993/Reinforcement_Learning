@@ -13,6 +13,7 @@ class MyAgent(BaseModel):
         self.sess = sess
         self.env = environment
         self.best_reward = 0.0
+        self.loss_val = 0.0
         self.history = History(self.config)
         self.memory = ReplayMemory(self.config, self.model_dir)
         self.build_dqn()
@@ -38,14 +39,17 @@ class MyAgent(BaseModel):
             screen, reward, action, terminal = self.env.new_random_game()
 
         episode_reward = 0
-
+        self.best_reward = 0
+        action = 0
         ## Take steps and learn
         for self.step in tqdm(range(int(self.config.learn_start), int(self.config.max_step)), ncols=70, initial=int(self.config.learn_start)):
 
             ## Predict action
-            action = self.predict(self.history.get(), random_action=True)
+            action = self.predict(self.history.get())
+
             screen, reward, terminal = self.env.act(action, is_training=True)
             episode_reward += reward
+
             if episode_reward > self.best_reward:
                 print "Best Reward: ", episode_reward
                 self.best_reward = episode_reward
@@ -59,8 +63,11 @@ class MyAgent(BaseModel):
                 screen, reward, action, terminal = self.env.new_random_game()
 
             ## train NN with sample events
-            if self.step % self.train_frequency == 0:
+            if self.step % (self.train_frequency) == 0:
                 self.minibatching()
+
+            if self.step % self.test_step == 0:
+                print "loss:", self.loss_val
 
     def minibatching(self):
         # FF state to find Q(s,a)
@@ -72,14 +79,17 @@ class MyAgent(BaseModel):
         maxqT1 = np.max(qT1, axis=1)
         target = (1. - terminal) * self.discount * maxqT1 + reward
 
-        self.sess.run([self.train_op ], {
+        _, self.loss_val = self.sess.run([self.train_op, self.loss], {
             self.state: stateT,
             self.action_pl: action,
             self.y_pl: target
             })
 
-    def predict(self, state, random_action):
-        ep = (self.ep_end +
+    def predict(self, state, random_action=False, test_ep=None):
+        if test_ep:
+            ep = test_ep
+        else:
+            ep = (self.ep_end +
                     max(0., (self.ep_start - self.ep_end)
                                   * (self.ep_end_t - max(0., self.step - self.learn_start)) / self.ep_end_t))
 
@@ -91,21 +101,49 @@ class MyAgent(BaseModel):
         return action
 
 
-    def play(self):
+    def play(self, n_step=10000, episodes=100):
         ## Called when just testing the model
-        pass
+        best_reward = 0
+        test_history = History(self.config)
+
+        for idx in xrange(episodes):
+            screen, reward, action, terminal = self.env.new_random_game()
+            current_reward = 0
+
+            for _ in range(self.history_length):
+                test_history.add(screen)
+
+            for t in tqdm(range(n_step), ncols=70):
+                action = self.predict(test_history.get(), test_ep=0.1)
+                screen, reward, terminal = self.env.act(action, is_training=False)
+                test_history.add(screen)
+
+                current_reward += reward
+                if terminal: break
+
+            if current_reward > best_reward:
+                best_reward = current_reward
+                best_idx = idx
+
+            print ""
+            print "Best reward: %d" %(best_reward)
+            print ""
+
+
 
     def build_dqn(self):
         ## Here minibatches will flow through the tensor graph
         ## None == 32 for minibatches of 32 states
+        xavier = tf.contrib.layers.xavier_initializer()
+        relu = tf.nn.relu
 
         ## Pixels of recent 4 frames
         self.state = tf.placeholder(shape=[None, 84, 84,4], dtype=tf.float32, name='state')
 
         ## convolutions
-        conv1 = tf.contrib.layers.conv2d(self.state, 32, 8, 4, activation_fn=tf.nn.relu)
-        conv2 = tf.contrib.layers.conv2d(conv1     , 64, 4, 2, activation_fn=tf.nn.relu)
-        conv3 = tf.contrib.layers.conv2d(conv2     , 64, 3, 1, activation_fn=tf.nn.relu)
+        conv1 = tf.contrib.layers.conv2d(self.state, 32, 8, 4, activation_fn=relu, weights_initializer=xavier, biases_initializer=xavier)
+        conv2 = tf.contrib.layers.conv2d(conv1, 64, 4, 2, activation_fn=relu, weights_initializer=xavier, biases_initializer=xavier)
+        conv3 = tf.contrib.layers.conv2d(conv2, 64, 3, 1, activation_fn=relu, weights_initializer=xavier, biases_initializer=xavier)
 
         flattened = tf.contrib.layers.flatten(conv3)
 
@@ -127,14 +165,16 @@ class MyAgent(BaseModel):
 
 
         ## Get the predictions for the chosen action only
-        gather_indices = tf.range(self.batch_size) * tf.shape(self.q)[1] + self.action_pl
-        self.action_prediction = tf.gather(tf.reshape(self.q, [-1]), gather_indices)
+        #gather_indices = tf.range(self.batch_size) * tf.shape(self.q)[1] + self.action_pl
+        #self.action_prediction = tf.gather(tf.reshape(self.q, [-1]), gather_indices)
+        action_one_hot = tf.one_hot(self.action_pl, self.env.action_size, 1.0, 0.0, name='action_one_hot')
+        self.action_prediction = tf.reduce_sum(self.q * action_one_hot, reduction_indices=1, name='q_acted')
+
 
         ## Calculate the loss
         self.losses = tf.squared_difference(self.y_pl, self.action_prediction)
 
         self.loss = tf.reduce_mean(self.losses)
-        print "loss:", self.loss
         self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
         self.train_op = self.optimizer.minimize(self.loss, global_step=tf.contrib.framework.get_global_step())
 

@@ -1,15 +1,19 @@
-import tensortflow as tf
+import tensorflow as tf
+from tqdm import tqdm
 from utils import get_time, save_pkl, load_pkl
 from .base import BaseModel
 from .history import History
 from .replay_memory import ReplayMemory
-
-class Agent(BaseModel):
+import random
+import numpy as np
+class MyAgent(BaseModel):
 
     def __init__(self, config, environment, sess):
-        super(Agent, self).__init__(config)
+        super(MyAgent, self).__init__(config)
         self.sess = sess
         self.env = environment
+        self.best_reward = 0.0
+        self.history = History(self.config)
         self.memory = ReplayMemory(self.config, self.model_dir)
         self.build_dqn()
 
@@ -18,11 +22,11 @@ class Agent(BaseModel):
         screen, reward, action, terminal = self.env.new_random_game()
 
         ## populate history with same screen
-        for _ in range(self.history.length):
+        for _ in range(self.config.history_length):
             self.history.add(screen)
 
-        ## Take some random steps
-        for self.step in tqdm(range(start_step, self.learn_step), ncols=70, initial=start_step):
+        ## Take some random steps to fill memory
+        for self.step in tqdm(range(1, int(self.config.learn_start)), ncols=70, initial=1):
 
             action = self.predict(self.history.get(), random_action=True)
             screen, reward, terminal = self.env.act(action, is_training=True)
@@ -30,24 +34,49 @@ class Agent(BaseModel):
             self.history.add(screen)
             self.memory.add(screen, reward, action, terminal)
 
+            ## new game
+            screen, reward, action, terminal = self.env.new_random_game()
 
-        for self.step in tqdm(range(learn_step, self.max_step), ncols=70, initial=learn_step):
+        episode_reward = 0
+
+        ## Take steps and learn
+        for self.step in tqdm(range(int(self.config.learn_start), int(self.config.max_step)), ncols=70, initial=int(self.config.learn_start)):
 
             ## Predict action
             action = self.predict(self.history.get(), random_action=True)
             screen, reward, terminal = self.env.act(action, is_training=True)
+            episode_reward += reward
+            if episode_reward > self.best_reward:
+                print "Best Reward: ", episode_reward
+                self.best_reward = episode_reward
 
             self.history.add(screen)
             self.memory.add(screen, reward, action, terminal)
 
+            if terminal:
+                ## new game
+                episode_reward = 0
+                screen, reward, action, terminal = self.env.new_random_game()
+
             ## train NN with sample events
+            if self.step % self.train_frequency == 0:
+                self.minibatching()
 
-            self.minibatching()
+    def minibatching(self):
+        # FF state to find Q(s,a)
+        # FF all s' to find max Q(s', a')
+        # calculate target
+        stateT, action, reward, stateT1, terminal = self.memory.sample()
+        qT1 = self.q.eval({self.state: stateT1})
+        terminal = np.array(terminal) + 0.
+        maxqT1 = np.max(qT1, axis=1)
+        target = (1. - terminal) * self.discount * maxqT1 + reward
 
-    def minibatching():
-        stateT action, reward, stateT1, terminal = self.memory.sample()
-
-        ##
+        self.sess.run([self.train_op ], {
+            self.state: stateT,
+            self.action_pl: action,
+            self.y_pl: target
+            })
 
     def predict(self, state, random_action):
         ep = (self.ep_end +
@@ -57,8 +86,7 @@ class Agent(BaseModel):
         if random_action or random.random() < ep:
             action = random.randrange(self.env.action_size)
         else:
-            pass
-            ##action = ##
+            action = self.q_action.eval({self.state: [state]})[0]
 
         return action
 
@@ -68,17 +96,46 @@ class Agent(BaseModel):
         pass
 
     def build_dqn(self):
-        ## Build placeholders for inputs
-        ## Build the skeleton for tensors to flow through
-        ## build convolutions
-        ## build fully connected layers
+        ## Here minibatches will flow through the tensor graph
+        ## None == 32 for minibatches of 32 states
 
         ## Pixels of recent 4 frames
-        self.state = tf.placeholder('float32',
-                [None, self.screen_height, self.screen_width, self.history_length], name='state']
+        self.state = tf.placeholder(shape=[None, 84, 84,4], dtype=tf.float32, name='state')
+
+        ## convolutions
+        conv1 = tf.contrib.layers.conv2d(self.state, 32, 8, 4, activation_fn=tf.nn.relu)
+        conv2 = tf.contrib.layers.conv2d(conv1     , 64, 4, 2, activation_fn=tf.nn.relu)
+        conv3 = tf.contrib.layers.conv2d(conv2     , 64, 3, 1, activation_fn=tf.nn.relu)
+
+        flattened = tf.contrib.layers.flatten(conv3)
+
+        ## fully connected hidden layer
+        fc1 = tf.contrib.layers.fully_connected(flattened, 512)
+
+        ## output layer
+        self.q = tf.contrib.layers.fully_connected(fc1, self.env.action_size)
+
+        self.q_action = tf.argmax(self.q, dimension=1)
+
+        #### ---- Action for a state done --- ###
+
+         # The TD target value
+        self.y_pl = tf.placeholder(shape=[None], dtype=tf.float32, name="y")
+
+        ## Place holder for which actions was taken in minibatch samples
+        self.action_pl = tf.placeholder(shape=[None], dtype=tf.int32, name='actions')
 
 
+        ## Get the predictions for the chosen action only
+        gather_indices = tf.range(self.batch_size) * tf.shape(self.q)[1] + self.action_pl
+        self.action_prediction = tf.gather(tf.reshape(self.q, [-1]), gather_indices)
 
+        ## Calculate the loss
+        self.losses = tf.squared_difference(self.y_pl, self.action_prediction)
 
+        self.loss = tf.reduce_mean(self.losses)
+        print "loss:", self.loss
+        self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        self.train_op = self.optimizer.minimize(self.loss, global_step=tf.contrib.framework.get_global_step())
 
-
+        tf.initialize_all_variables().run()

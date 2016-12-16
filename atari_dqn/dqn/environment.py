@@ -75,16 +75,11 @@ class GymEnvironment(Environment):
       cumulated_reward = cumulated_reward + self.reward
 
       if is_training and start_lives > self.lives:
-        print "Lives: ", self.lives
-        cumulated_reward -= 10
-        if self.lives == 0:
-            self.terminal = True
+        self.terminal = True
 
       if self.terminal:
         break
 
-    ## For each step survived add a reward
-    cumulated_reward += 1
     self.reward = cumulated_reward
 
     self.after_act(action)

@@ -2,6 +2,8 @@ import random
 import tensorflow as tf
 
 from dqn.agent import Agent
+from dqn.myagent import MyAgent
+
 from dqn.environment import GymEnvironment, SimpleGymEnvironment
 from config import get_config
 
@@ -55,7 +57,7 @@ def main(_):
     if not FLAGS.use_gpu:
       config.cnn_format = 'NHWC'
 
-    agent = Agent(config, env, sess)
+    agent = MyAgent(config, env, sess)
 
     if FLAGS.is_train:
       agent.train()

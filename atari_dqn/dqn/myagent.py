@@ -16,6 +16,7 @@ class MyAgent(BaseModel):
         self.loss_val = 0.0
         self.history = History(self.config)
         self.memory = ReplayMemory(self.config, self.model_dir)
+        self.num_episode = 0
         self.build_dqn()
 
     def train(self):
@@ -42,10 +43,14 @@ class MyAgent(BaseModel):
                 screen, reward, action, terminal = self.env.new_random_game()
                 reward = self.clip_reward(reward)
 
-
         episode_reward = 0
         self.best_reward = 0
-        action = 0
+        self.num_episode += 1
+
+        # Start a new game
+        screen, reward, action, terminal = self.env.new_random_game()
+        reward = self.clip_reward(reward)
+
         ## Take steps and learn
         for self.step in tqdm(range(int(self.config.learn_start), int(self.config.max_step)), ncols=70, initial=int(self.config.learn_start)):
 
@@ -57,6 +62,7 @@ class MyAgent(BaseModel):
             episode_reward += reward
 
             if episode_reward > self.best_reward:
+                print
                 print "Best Reward: ", episode_reward
                 self.best_reward = episode_reward
 
@@ -65,6 +71,8 @@ class MyAgent(BaseModel):
 
             if terminal:
                 ## new game
+                print self.num_episode, "Episode Reward: ", episode_reward, "loss:", self.loss_val
+                self.num_episode += 1
                 episode_reward = 0
                 screen, reward, action, terminal = self.env.new_random_game()
                 reward = self.clip_reward(reward)
@@ -73,8 +81,6 @@ class MyAgent(BaseModel):
             if self.step % (self.train_frequency) == 0:
                 self.minibatching()
 
-            if self.step % self.test_step == 0:
-                print "loss:", self.loss_val
 
     def minibatching(self):
         # FF state to find Q(s,a)

@@ -21,6 +21,7 @@ class MyAgent(BaseModel):
     def train(self):
         ## new game
         screen, reward, action, terminal = self.env.new_random_game()
+        reward = self.clip_reward(reward)
 
         ## populate history with same screen
         for _ in range(self.config.history_length):
@@ -31,12 +32,16 @@ class MyAgent(BaseModel):
 
             action = self.predict(self.history.get(), random_action=True)
             screen, reward, terminal = self.env.act(action, is_training=True)
+            reward = self.clip_reward(reward)
 
             self.history.add(screen)
             self.memory.add(screen, reward, action, terminal)
 
             ## new game
-            screen, reward, action, terminal = self.env.new_random_game()
+            if terminal:
+                screen, reward, action, terminal = self.env.new_random_game()
+                reward = self.clip_reward(reward)
+
 
         episode_reward = 0
         self.best_reward = 0
@@ -48,6 +53,7 @@ class MyAgent(BaseModel):
             action = self.predict(self.history.get())
 
             screen, reward, terminal = self.env.act(action, is_training=True)
+            reward = self.clip_reward(reward)
             episode_reward += reward
 
             if episode_reward > self.best_reward:
@@ -61,6 +67,7 @@ class MyAgent(BaseModel):
                 ## new game
                 episode_reward = 0
                 screen, reward, action, terminal = self.env.new_random_game()
+                reward = self.clip_reward(reward)
 
             ## train NN with sample events
             if self.step % (self.train_frequency) == 0:
@@ -85,6 +92,12 @@ class MyAgent(BaseModel):
             self.y_pl: target
             })
 
+
+    def clip_reward(reward):
+        if reward > 1: return 1
+        elif reward < -1: return -1
+        return reward
+
     def predict(self, state, random_action=False, test_ep=None):
         if test_ep:
             ep = test_ep
@@ -108,6 +121,8 @@ class MyAgent(BaseModel):
 
         for idx in xrange(episodes):
             screen, reward, action, terminal = self.env.new_random_game()
+            reward = self.clip_reward(reward)
+
             current_reward = 0
 
             for _ in range(self.history_length):
@@ -116,6 +131,9 @@ class MyAgent(BaseModel):
             for t in tqdm(range(n_step), ncols=70):
                 action = self.predict(test_history.get(), test_ep=0.1)
                 screen, reward, terminal = self.env.act(action, is_training=False)
+                reward = self.clip_reward(reward)
+
+
                 test_history.add(screen)
 
                 current_reward += reward

@@ -65,6 +65,6 @@ Result of training for 24 hours on CPU.
 
 ## References
 
-- [simple_dqn](https://github.com/tambetm/simple_dqn.git) for replay memory
-- [framework](https://github.com/devsisters/DQN-tensorflow)
+- [Simple DQN](https://github.com/tambetm/simple_dqn.git)
+- [Atari Framework](https://github.com/devsisters/DQN-tensorflow)
 - [Playing Atari with Deep Reinforcement Learning](https://www.cs.toronto.edu/~vmnih/docs/dqn.pdf)

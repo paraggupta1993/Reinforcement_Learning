@@ -93,7 +93,7 @@ class MyAgent(BaseModel):
             })
 
 
-    def clip_reward(reward):
+    def clip_reward(self, reward):
         if reward > 1: return 1
         elif reward < -1: return -1
         return reward
@@ -197,6 +197,13 @@ class MyAgent(BaseModel):
 
         self.loss = tf.reduce_mean(self.losses)
         self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
-        self.train_op = self.optimizer.minimize(self.loss, global_step=tf.contrib.framework.get_global_step())
+
+        self.gvs = self.optimizer.compute_gradients(self.loss)
+
+        ## Clip Error
+        self.capped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in self.gvs]
+
+        self.train_op = self.optimizer.apply_gradients(self.capped_gvs, global_step=tf.contrib.framework.get_global_step())
+        #self.train_op = self.optimizer.minimize(self.loss, global_step=tf.contrib.framework.get_global_step())
 
         tf.initialize_all_variables().run()

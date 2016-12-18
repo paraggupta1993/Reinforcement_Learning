@@ -134,6 +134,7 @@ class MyAgent(BaseModel):
     def build_dqn(self):
         ## Here minibatches will flow through the tensor graph
         ## None == 32 for minibatches of 32 states
+
         xavier = tf.contrib.layers.xavier_initializer()
         relu = tf.nn.relu
 
@@ -141,9 +142,11 @@ class MyAgent(BaseModel):
         self.state = tf.placeholder(shape=[None, 84, 84,4], dtype=tf.float32, name='state')
 
         ## convolutions
-        conv1 = tf.contrib.layers.conv2d(self.state, 32, 8, 4, activation_fn=relu, weights_initializer=xavier, biases_initializer=xavier)
-        conv2 = tf.contrib.layers.conv2d(conv1, 64, 4, 2, activation_fn=relu, weights_initializer=xavier, biases_initializer=xavier)
-        conv3 = tf.contrib.layers.conv2d(conv2, 64, 3, 1, activation_fn=relu, weights_initializer=xavier, biases_initializer=xavier)
+
+
+        conv1 = tf.contrib.layers.conv2d(self.state, 32, 8, 4, activation_fn=relu )
+        conv2 = tf.contrib.layers.conv2d(conv1, 64, 4, 2, activation_fn=relu)
+        conv3 = tf.contrib.layers.conv2d(conv2, 64, 3, 1, activation_fn=relu)
 
         flattened = tf.contrib.layers.flatten(conv3)
 

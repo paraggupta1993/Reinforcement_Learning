@@ -122,9 +122,12 @@ class MyAgent(BaseModel):
                 self.train_writer.add_summary(merged_summaries, self.step)
 
             ## Copy learned network to target network if necessary
-            if self.step % 1000:
+            if self.step % 1000 == 0:
+
                 for elem in elements:
                     self.copy_ops[elem].eval({self.copyplaceholders[elem]: self.net[elem].eval()})
+
+                self.save_model(self.step + 1)
 
             if terminal:
                 ## new game
@@ -303,4 +306,7 @@ class MyAgent(BaseModel):
             self.copy_ops[elem] = target_net[elem].assign(self.copyplaceholders[elem])
 
         tf.initialize_all_variables().run()
+        self.load_model()
+        for elem in elements:
+                self.copy_ops[elem].eval({self.copyplaceholders[elem]: self.net[elem].eval()})
 

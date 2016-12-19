@@ -1,4 +1,5 @@
 import tensorflow as tf
+from tensorflow.contrib.layers.python.layers import initializers
 from tqdm import tqdm
 from utils import get_time, save_pkl, load_pkl
 from .base import BaseModel
@@ -6,7 +7,49 @@ from .history import History
 from .replay_memory import ReplayMemory
 import random
 import numpy as np
+
+def fully_connected(input_, output_size, name='fully_connected'):
+  shape = input_.get_shape().as_list()
+  stddev=0.02
+  bias_start=0.0,
+
+  activation_fn=tf.nn.relu
+  with tf.variable_scope(name):
+    w = tf.get_variable('Matrix', [shape[1], output_size], tf.float32,
+        tf.random_normal_initializer(stddev=stddev))
+    b = tf.get_variable('bias', [output_size],
+        initializer=tf.constant_initializer(bias_start))
+
+    out = tf.nn.bias_add(tf.matmul(input_, w), b)
+
+    return activation_fn(out), w, b
+
+def conv2d(x,
+           output_dim,
+           kernel_size,
+           stride,
+           name='conv2d'):
+
+  activation_fn=tf.nn.relu
+  initializer=tf.truncated_normal_initializer(0, 0.02)
+
+  with tf.variable_scope(name):
+    stride = [1, stride[0], stride[1], 1]
+    kernel_shape = [kernel_size[0], kernel_size[1], x.get_shape()[-1], output_dim]
+
+    w = tf.get_variable('w', kernel_shape, tf.float32, initializer=initializer)
+    conv = tf.nn.conv2d(x, w, stride, 'VALID')
+
+    b = tf.get_variable('biases', [output_dim], initializer=tf.constant_initializer(0.0))
+    out = tf.nn.bias_add(conv, b)
+    out = activation_fn(out)
+
+    return out, w, b
+
+
+elements = ['w1', 'w2', 'w3', 'w4', 'w5', 'b1', 'b2', 'b3', 'b4', 'b5']
 class MyAgent(BaseModel):
+
 
     def __init__(self, config, environment, sess):
         super(MyAgent, self).__init__(config)
@@ -78,6 +121,11 @@ class MyAgent(BaseModel):
                 # if self.step % self.test_step == 0:
                 self.train_writer.add_summary(merged_summaries, self.step)
 
+            ## Copy learned network to target network if necessary
+            if self.step % 1000:
+                for elem in elements:
+                    self.copy_ops[elem].eval({self.copyplaceholders[elem]: self.net[elem].eval()})
+
             if terminal:
                 ## new game
                 print self.num_episode, "Episode Reward: ", self.episode_reward, "loss:", self.loss_val
@@ -91,7 +139,10 @@ class MyAgent(BaseModel):
         # FF all s' to find max Q(s', a')
         # calculate target
         stateT, action, reward, stateT1, terminal = self.memory.sample()
-        qT1 = self.q.eval({self.state: stateT1})
+        # qT1 = self.q.eval({self.state: stateT1})
+
+        ## Doing evaluation using a different target network
+        qT1 = self.q_t.eval({self.state: stateT1})
         terminal = np.array(terminal) + 0.
         maxqT1 = np.max(qT1, axis=1)
         target = (1. - terminal) * self.discount * maxqT1 + reward
@@ -105,7 +156,6 @@ class MyAgent(BaseModel):
             })
 
         return merged_summaries
-
 
     def clip_reward(self, reward):
         if reward > 1: return 1
@@ -161,32 +211,30 @@ class MyAgent(BaseModel):
             print "Best reward: %d" %(best_reward)
             print ""
 
-
-
     def build_dqn(self):
         ## Here minibatches will flow through the tensor graph
         ## None == 32 for minibatches of 32 states
 
-        xavier = tf.contrib.layers.xavier_initializer()
+        # xavier = tf.contrib.layers.xavier_initializer()
         relu = tf.nn.relu
-
+        self.net = {}
+        target_net = {}
+        net = self.net
         ## Pixels of recent 4 frames
         self.state = tf.placeholder(shape=[None, 84, 84,4], dtype=tf.float32, name='state')
 
         ## convolutions
-
-
-        conv1 = tf.contrib.layers.conv2d(self.state, 32, 8, 4, activation_fn=relu )
-        conv2 = tf.contrib.layers.conv2d(conv1, 64, 4, 2, activation_fn=relu)
-        conv3 = tf.contrib.layers.conv2d(conv2, 64, 3, 1, activation_fn=relu)
+        conv1, net['w1'], net['b1'] = conv2d(self.state, 32, [8, 8], [4,4], name='l1')
+        conv2, net['w2'], net['b2'] = conv2d(conv1, 64, [4, 4], [2, 3], name='l2')
+        conv3, net['w3'], net['b3'] = conv2d(conv2, 32, [3, 3], [1, 1], name='l3')
 
         flattened = tf.contrib.layers.flatten(conv3)
 
         ## fully connected hidden layer
-        fc1 = tf.contrib.layers.fully_connected(flattened, 512)
+        fc1, net['w4'], net['b4'] = fully_connected(flattened, 512, name='l4')
 
         ## output layer
-        self.q = tf.contrib.layers.fully_connected(fc1, self.env.action_size)
+        self.q, net['w5'], net['b5'] = fully_connected(fc1, self.env.action_size, name='q')
 
         self.q_action = tf.argmax(self.q, dimension=1)
 
@@ -234,4 +282,25 @@ class MyAgent(BaseModel):
         # tf.train.SummaryWriter("../log")
 
 
+        ## Build a target network
+        self.state_t = tf.placeholder(shape=[None, 84, 84,4], dtype=tf.float32, name='state_t')
+        conv1_t, target_net['w1'], target_net['b1'] = conv2d(self.state_t, 32, [8, 8], [4,4], name='l1_t')
+        conv2_t, target_net['w2'], target_net['b2'] = conv2d(conv1_t, 64, [4, 4], [2, 3], name='l2_t')
+        conv3_t, target_net['w3'], target_net['b3'] = conv2d(conv2_t, 32, [3, 3], [1, 1], name='l3_t')
+        flattened_t = tf.contrib.layers.flatten(conv3_t)
+        fc1_t, target_net['w4'], target_net['b4']= fully_connected(flattened_t, 512, name='l4_t')
+        self.q_t, target_net['w5'], target_net['b5'] = fully_connected(fc1, self.env.action_size, name='q_t')
+        self.q_action_t = tf.argmax(self.q_t, dimension=1)
+
+        ## Build placeholders to copy from network to target network
+        self.copyplaceholders = {}
+        for elem in elements:
+            self.copyplaceholders[elem] = tf.placeholder('float32', target_net[elem].get_shape().as_list(), name=elem)
+
+        # defining ops to copy
+        self.copy_ops = {}
+        for elem in elements:
+            self.copy_ops[elem] = target_net[elem].assign(self.copyplaceholders[elem])
+
         tf.initialize_all_variables().run()
+

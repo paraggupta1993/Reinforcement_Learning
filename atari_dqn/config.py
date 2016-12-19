@@ -57,10 +57,7 @@ class M1(DQNConfig):
   action_repeat = 1
 
 def get_config(FLAGS):
-  if FLAGS.model == 'm1':
-    config = M1
-  elif FLAGS.model == 'm2':
-    config = M2
+  config = M1
 
   for k, v in FLAGS.__dict__['__flags'].items():
     if k == 'gpu':

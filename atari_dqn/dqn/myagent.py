@@ -13,6 +13,7 @@ class MyAgent(BaseModel):
         self.sess = sess
         self.env = environment
         self.best_reward = 0.0
+        self.episode_reward = 0.0
         self.loss_val = 0.0
         self.history = History(self.config)
         self.memory = ReplayMemory(self.config, self.model_dir)
@@ -43,7 +44,7 @@ class MyAgent(BaseModel):
                 screen, reward, action, terminal = self.env.new_random_game()
                 reward = self.clip_reward(reward)
 
-        episode_reward = 0
+        self.episode_reward = 0
         self.best_reward = 0
         self.num_episode += 1
 
@@ -59,28 +60,31 @@ class MyAgent(BaseModel):
 
             screen, reward, terminal = self.env.act(action, is_training=True)
             reward = self.clip_reward(reward)
-            episode_reward += reward
+            self.episode_reward += reward
 
-            if episode_reward > self.best_reward:
+            if self.episode_reward > self.best_reward:
                 print
-                print "Best Reward: ", episode_reward
-                self.best_reward = episode_reward
+                print "Best Reward: ", self.episode_reward
+                self.best_reward = self.episode_reward
 
             self.history.add(screen)
             self.memory.add(screen, reward, action, terminal)
 
-            if terminal:
-                ## new game
-                print self.num_episode, "Episode Reward: ", episode_reward, "loss:", self.loss_val
-                self.num_episode += 1
-                episode_reward = 0
-                screen, reward, action, terminal = self.env.new_random_game()
-                reward = self.clip_reward(reward)
-
             ## train NN with sample events
             if self.step % (self.train_frequency) == 0:
-                self.minibatching()
+                merged_summaries = self.minibatching()
 
+                ## Write Summaries into Summary writer
+                # if self.step % self.test_step == 0:
+                self.train_writer.add_summary(merged_summaries, self.step)
+
+            if terminal:
+                ## new game
+                print self.num_episode, "Episode Reward: ", self.episode_reward, "loss:", self.loss_val
+                self.num_episode += 1
+                self.episode_reward = 0
+                screen, reward, action, terminal = self.env.new_random_game()
+                reward = self.clip_reward(reward)
 
     def minibatching(self):
         # FF state to find Q(s,a)
@@ -92,11 +96,15 @@ class MyAgent(BaseModel):
         maxqT1 = np.max(qT1, axis=1)
         target = (1. - terminal) * self.discount * maxqT1 + reward
 
-        _, self.loss_val = self.sess.run([self.train_op, self.loss], {
+        _, self.loss_val, merged_summaries = self.sess.run([self.train_op, self.loss, self.merged], {
             self.state: stateT,
             self.action_pl: action,
-            self.y_pl: target
+            self.y_pl: target,
+            self.summary_br_pl: self.best_reward,
+            self.summary_er_pl: self.episode_reward
             })
+
+        return merged_summaries
 
 
     def clip_reward(self, reward):
@@ -202,6 +210,7 @@ class MyAgent(BaseModel):
         self.losses = tf.squared_difference(self.y_pl, self.action_prediction)
 
         self.loss = tf.reduce_mean(self.losses)
+
         self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
 
         self.gvs = self.optimizer.compute_gradients(self.loss)
@@ -211,5 +220,18 @@ class MyAgent(BaseModel):
 
         self.train_op = self.optimizer.apply_gradients(self.capped_gvs, global_step=tf.contrib.framework.get_global_step())
         #self.train_op = self.optimizer.minimize(self.loss, global_step=tf.contrib.framework.get_global_step())
+
+        # Merge all the summaries and write them out
+        self.summary_br_pl =   tf.placeholder(shape=None, dtype=tf.float32, name='summary_br_pl')
+        self.summary_er_pl =   tf.placeholder(shape=None, dtype=tf.float32, name='summary_er_pl')
+        tf.summary.scalar('Loss', self.loss)
+        tf.summary.scalar('BestReward', self.summary_br_pl)
+        tf.summary.scalar('EpisodeReward', self.summary_er_pl)
+
+        self.merged = tf.summary.merge_all()
+        self.train_writer = tf.train.SummaryWriter('logs/' + '/train', self.sess.graph)
+        # test_writer = tf.train.SummaryWriter('../log/' + '/test')
+        # tf.train.SummaryWriter("../log")
+
 
         tf.initialize_all_variables().run()
